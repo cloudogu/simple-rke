@@ -1,0 +1,123 @@
+#!/bin/bash
+
+MASTER_COUNT=3
+WORKER_COUNT=3
+
+MASTER_PREFIX="rke-master"
+WORKER_PREFIX="rke-worker"
+
+RKE_CONFIG="cluster.yml"
+
+function create_node() {
+    NAME="${1}"
+    echo "create machine ${NAME}"
+    docker-machine create -d virtualbox --virtualbox-boot2docker-url file://$(pwd)/rancheros.iso "${NAME}"
+}
+
+function create() {
+  for i in $(seq 1 $MASTER_COUNT); do
+    create_node "${MASTER_PREFIX}-${i}"
+  done
+
+  for i in $(seq 1 $WORKER_COUNT); do
+    create_node "${WORKER_PREFIX}-${i}"
+  done
+}
+
+function destroy_node() {
+  NAME="${1}"
+  echo "destroy machine ${NAME}"
+  docker-machine rm -f "${NAME}"
+}
+
+function destroy() {
+  for i in $(seq 1 $MASTER_COUNT); do
+    destroy_node "${MASTER_PREFIX}-${i}"
+  done
+
+  for i in $(seq 1 $WORKER_COUNT); do
+    destroy_node "${WORKER_PREFIX}-${i}"
+  done
+}
+
+function create_master_config() {
+  IP=$(docker-machine ip "${NAME}")
+  echo "  # ${NAME}"
+  echo "  - address: ${IP}"
+  echo "    user: rancher"
+  echo "    ssh_key_path: ~/.docker/machine/machines/${NAME}/id_rsa"
+  echo "    role:"
+  echo "    - etcd"
+  echo "    - controlplane"
+}
+
+function create_worker_config() {
+  IP=$(docker-machine ip "${NAME}")
+  echo "  # ${NAME}"
+  echo "  - address: ${IP}"
+  echo "    user: rancher"
+  echo "    ssh_key_path: ~/.docker/machine/machines/${NAME}/id_rsa"
+  echo "    role:"
+  echo "    - worker"
+}
+
+function create_rke_config() {
+  echo "# do not edit, file is generated" > "${RKE_CONFIG}"
+  echo "nodes:" >> "${RKE_CONFIG}"
+  for i in $(seq 1 $MASTER_COUNT); do
+    NAME="${MASTER_PREFIX}-${i}"
+    create_master_config "${NAME}" >> "${RKE_CONFIG}"
+  done
+
+  for i in $(seq 1 $WORKER_COUNT); do
+    NAME="${WORKER_PREFIX}-${i}"
+    create_worker_config "${NAME}" >> "${RKE_CONFIG}"
+  done
+}
+
+function download_dependencies() {
+  if [ ! -f rancheros.iso ]; then
+    wget https://github.com/rancher/os/releases/download/v1.5.1/rancheros.iso
+  fi
+
+  if [ ! -f rke ]; then
+    wget https://github.com/rancher/rke/releases/download/v0.1.16/rke_linux-amd64 -O rke
+    chmod +x rke
+  fi
+}
+
+function deploy_k8s() {
+  ./rke up
+}
+
+function up() {
+  download_dependencies
+  create
+  create_rke_config
+  deploy_k8s
+}
+
+function down() {
+  destroy
+}
+
+function show_help() {
+  echo "usage simple-rke [up|down]"
+  exit 1
+}
+
+subcommand=$1
+case $subcommand in
+    "" | "-h" | "--help")
+        show_help
+        ;;
+    "up") 
+        up
+        ;;
+    "down")
+        down
+        ;;
+    *)
+        show_help
+        ;;
+esac
